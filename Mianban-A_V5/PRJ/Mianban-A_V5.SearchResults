@@ -1,0 +1,3 @@
+---- g_ZuobianqiSetB.HoldOn 匹配 (2 在 1 文件 ) ----
+CanAnalyzer.c (e:\project\qy\thhlc\firmware\mianban-a_v5\src\app):			if(g_ZuobianqiSetB.HoldOn)		//面板B参数被更改 同步参数
+CanAnalyzer.c (e:\project\qy\thhlc\firmware\mianban-a_v5\src\app):		if(!g_ZuobianqiSetB.HoldOn)   // 面板B未处于设置

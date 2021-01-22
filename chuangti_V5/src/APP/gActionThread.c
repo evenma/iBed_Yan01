@@ -1,0 +1,973 @@
+#include <Actionthread.h>
+#include <rtthread.h>
+#include <finsh.h>
+#ifdef RT_USING_RTGUI
+#include <rtgui/rtgui.h>
+#endif
+#include "CAN/IncludeCan.h"
+#include "CAN/Can.h"
+#include "lpc214x.h"
+#include <Sensor.h>
+#include "CanAnalyzer.h"
+
+// 邮箱相关变量
+static struct rt_mailbox m_mb;
+static rt_uint32_t mbPool[1];
+// 事件
+static struct rt_event m_evt;
+// 定时器，用于超时
+static struct rt_timer m_timer={0};
+
+
+// 抽气泵的气量按照3.8L/min 计算
+#define qidianfangpingyanshi 600   // 气垫放平延时时间10min
+#define qidiancefanyanshi     300  // 设定左右摇时侧翻时间各5 min
+#define qidianzuoyouyaoyanshi 3600 // 左右摇延时设定为1小时
+#define FaMaxValue 0x12C  //AD阀值，1.5V 
+#define FaMinValue 0x020  //0x12为零压力值； AD阀值，V 
+
+
+// 所有电机都是高电平动，低电平不动
+// work 是使能，dir是方向，1=伸出，0=缩回
+
+#define ZuoCQF(on)	    if(on) {IO0SET = BIT22;} else {IO0CLR = BIT22;} 
+#define YouCQF(on)	    if(on) {IO0SET = BIT23;} else {IO0CLR = BIT23;} 
+
+#define ZuoXQF(on)	    if(on) {IO1SET = BIT19;} else {IO1CLR = BIT19;} 
+#define YouXQF(on)	    if(on) {IO0SET = BIT24;} else {IO0CLR = BIT24;}
+
+#define ChongQiBeng(on)	    if(on) {IO1SET = BIT30;} else {IO1CLR = BIT30;} 
+#define ChouQiBeng(on)	    if(on) {IO1SET = BIT29;} else {IO1CLR = BIT29;} 
+
+// 翻身使能状态机
+u8 m_FanShenEnable = 1;	// 1=允许，0=不允许
+u8 m_ShuiPing=0;				// 记录之前是否处于水平状态，1=水平
+
+extern bool flag_zuofan;
+extern bool flag_youfan;
+extern bool flag_zuoyou;
+extern bool flag_pingtang;
+extern unsigned char flag_qidong;
+
+
+void DoBianmenkai(void)
+{
+#if !DONG_ZUO_DEBUG
+	if(g_sensor.ShuiPing)
+#endif
+	{
+		TuiBei(1, 0);  // 便门推杆采用推背电控 
+		while(!g_ToiletSensor.QianBianMenZuoDaKai)
+		{
+			//	如果检测到有按键暂停
+			if(WaitTimeout(1*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<BianMenQuanGuan)))
+			{
+				TuiBei(0, 0); // 关闭
+				return;
+			}
+		}
+		TuiBei(0, 0); // 关闭
+	}
+
+
+}
+
+
+// 翻身 
+void QiDianFanShen(u8 work,u8 dir)
+{
+	if(work)
+	{
+		if(dir)  // 右翻身，左边充气，右边放气
+		{
+			ZuoCQF(1);
+			YouCQF(0);
+			ZuoXQF(0);
+			YouXQF(1);
+		}
+		else      // 左翻身，右边充气，左边放气
+		{
+			ZuoCQF(0);
+			YouCQF(1);
+			ZuoXQF(1);
+			YouXQF(0);				
+		}
+		ChongQiBeng(1);
+		ChouQiBeng(1);
+	}
+	else
+	{
+		ChongQiBeng(0);
+		ChouQiBeng(0);
+		ZuoCQF(0);
+		YouCQF(0);
+		ZuoXQF(0);
+		YouXQF(0);				
+	}
+}
+// 关闭充气泵，关闭进气阀和泄气阀
+void DoStopQiDian(void)
+{
+	QiDianFanShen(0, 0);
+}
+
+// 放平动作，气垫全部抽光气体
+static void DoFangPing(void)
+{
+    rt_kprintf("平躺 \r\n");
+	ZuoCQF(0);
+	YouCQF(0);
+	ZuoXQF(1);
+	YouXQF(1);	
+	ChouQiBeng(1);
+//   如果检测到没有气压，抽一定时间后停下
+	if((ADG_sensor.ZuoADValue<FaMinValue)&&(ADG_sensor.YouADValue<FaMinValue))
+	{
+	    rt_kprintf("检测到无气压 \r\n");
+		WaitTimeout(10*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianPingTang));
+	    flag_pingtang = 0;		
+		DoStopQiDian();
+		return;		
+	}
+	rt_kprintf("延时10min\r\n");
+	//  如果检测到有按键暂停
+	if(WaitTimeout(qidianfangpingyanshi*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianPingTang)))
+	{
+		DoStopQiDian();
+		return;
+	}
+	flag_pingtang = 0;
+	DoStopQiDian();
+}
+
+// 左翻
+static void DoZuoFan(void)
+{
+    rt_kprintf("左翻身 \r\n");
+	QiDianFanShen(1,1);
+	while(!(ADG_sensor.ZuoADValue>FaMaxValue))
+	{
+		//  如果检测到有按键暂停
+		if(WaitTimeout(5*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianZuoFan)|(1<<QiDianZuoYouYao)))
+		{
+			DoStopQiDian();
+			return;
+		}
+	}
+	flag_zuofan= 0;
+	DoStopQiDian();	
+}
+
+// 右翻
+static void DoYouFan(void)
+{
+    rt_kprintf("右翻身 \r\n");
+	QiDianFanShen(1,0);
+	while(!(ADG_sensor.YouADValue>FaMaxValue))
+	{
+		//	如果检测到有按键暂停
+		if(WaitTimeout(5*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianYouFan)))
+		{
+			DoStopQiDian();
+			return;
+		}
+	}
+	flag_youfan = 0;
+	DoStopQiDian(); 
+}
+
+// 左右摇 先左后右，每小时自动调整一次,一个周期12小时
+void DoZuoYouYao(void)
+{
+unsigned char i;
+  rt_kprintf("左右摇 \r\n");
+  for(i=0;i<12;i++)
+  {
+	rt_kprintf("第 %d 次左右循环侧翻身\r\n",(i+1)); 
+	
+	DoZuoFan();  // 6min
+	//	如果检测到有按键暂停,如果没有延时一定时间5min
+	if(WaitTimeout(qidiancefanyanshi*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianZuoYouYao)))
+	{
+		DoStopQiDian();
+		return;
+	}	
+	DoFangPing(); // 10min
+	//	如果检测到有按键暂停如果没有延时一定时间10min
+	if(WaitTimeout(qidianfangpingyanshi*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianZuoYouYao)))
+	{
+		DoStopQiDian();
+		return;
+	}	
+	
+	DoYouFan();  // 6min
+	//	如果检测到有按键暂停,如果没有延时一定时间5min
+	if(WaitTimeout(qidiancefanyanshi*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianZuoYouYao)))
+	{
+		DoStopQiDian();
+		return;
+	}	
+	DoFangPing(); // 10min
+	//	如果检测到有按键暂停
+	if(WaitTimeout(qidianfangpingyanshi*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<QiDianZuoYouYao)))
+	{
+		DoStopQiDian();
+		return;
+	}	
+
+  }
+
+	DoStopQiDian(); 
+
+
+}
+//---------------------以上为气动控制----------------//
+
+
+
+
+
+//---------------------以下为推杆控制----------------//
+// 所有电机都是高电平动，低电平不动
+// work 是使能，dir是方向，1=伸出，0=缩回
+
+// 背部 M1  P0.19 up; P0.20 Down;
+void BeiBu(u8 work,u8 dir)
+{
+	if(work)
+	{
+		if(dir)
+		{
+			IO0SET = BIT19;
+			IO0CLR = BIT20;
+		}
+		else
+		{
+			IO0CLR = BIT19;
+			IO0SET= BIT20;
+		}
+	}
+	else
+	{
+		IO0CLR=BIT19|BIT20;
+	}
+}
+
+// 腿部 M2   P0.18 up; P0.24 Down;
+void TuiBu(u8 work,u8 dir)
+{	
+	if(work)
+	{
+		if(dir)
+		{
+			IO0SET = BIT18;
+			IO0CLR = BIT24;
+		}
+		else
+		{
+			IO0CLR = BIT18;
+			IO0SET= BIT24;
+		}
+	}
+	else
+	{
+		IO0CLR=BIT18|BIT24;
+	}
+
+}
+
+// 左翻身 M3   P0.17 up; P0.23 Down;
+void ZuoFanShen(u8 work,u8 dir)
+{
+	if(work)
+	{
+		if(dir)
+		{
+			IO0SET = BIT17;
+			IO0CLR = BIT23;
+		}
+		else
+		{
+			IO0CLR = BIT17;
+			IO0SET= BIT23;
+		}
+	}
+	else
+	{
+		IO0CLR=BIT17|BIT23;
+	}
+
+
+}
+
+// 右翻身 M4  P0.16 up; P0.22 Down;
+void YouFanShen(u8 work,u8 dir)
+{
+	if(work)
+	{
+		if(dir)
+		{
+			IO0SET = BIT16;
+			IO0CLR = BIT22;
+		}
+		else
+		{
+			IO0CLR = BIT16;
+			IO0SET= BIT22;
+		}
+	}
+	else
+	{
+		IO0CLR=BIT16|BIT22;
+	}
+
+}
+
+// 推背 M5  用于便门打开推杆P0.16 work ;P0.17 dir
+void TuiBei(u8 work,u8 dir)
+{
+	if(work)
+	{
+		if(dir)
+		{
+			IO0SET = BIT17;
+		}
+		else
+		{
+			IO0CLR = BIT17;
+		}
+		IO0SET = BIT16;
+	}
+	else
+	{
+		IO0CLR = BIT16|BIT17;
+	}
+}
+
+void DoStop(void)
+{
+	BeiBu(0, 0);
+//	ChuangTi(0, 0);
+//	FanShen(0, 0);
+	TuiBu(0, 0);
+	ZuoFanShen(0,0);
+	YouFanShen(0,0);
+//	TuiBei(0, 0);
+//	QiDianFanShen(0,0);		
+}
+
+void Doautotest(void)
+{
+	unsigned char i;
+	rt_kprintf("自动测试开始\r\n");
+	if(!flag_zuoyou)
+		return; 
+	for(i=0;i<10;i++)
+	{
+// step1 : 放平
+	rt_kprintf("step1:开始放平\r\n");
+	TuiBu(1, 1);
+	BeiBu(1,0);
+	DelayXms(30);
+	g_sensor.TuiBuFangPing = (0==(IO0PIN&BIT24));
+	g_sensor.BeiBuFangPing = (0==(IO0PIN&BIT4));	
+	if((!ZYG_sensor.ZuoShuiPing)||(!ZYG_sensor.YouShuiPing)||(!g_sensor.BeiBuFangPing)||(!g_sensor.TuiBuFangPing)) // 先放平
+	{
+		if(ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			BeiBu(1, 0);
+			TuiBu(1, 1);
+			//ChuangTi(1, 0);
+			while((!g_sensor.TuiBuFangPing)||(!g_sensor.BeiBuFangPing)) // 等到位跳出				
+			{
+				if(WaitTimeout(2*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+				{
+					flag_zuoyou = 0;
+					DoStop();
+					return;
+				}
+			}
+		}
+		else 
+		{
+			ZuoFanShen(1,0);
+			YouFanShen(1,0);
+			while((!ZYG_sensor.ZuoShuiPing)||(!ZYG_sensor.YouShuiPing)) // 等到位跳出				
+			{if(WaitTimeout(2*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+			{
+				flag_zuoyou = 0;
+				DoStop();
+				return;
+			}}
+
+		}
+	}
+	DoStop();
+	rt_kprintf("step1:放平结束\r\n");
+	if(WaitTimeout(2*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+	{
+		flag_zuoyou = 0;
+		DoStop();
+		return;
+	}
+// step2: 起背	背升
+		rt_kprintf("step2:开始背升\r\n");
+		if(ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			BeiBu(1, 1);
+		}
+		if(!flag_zuoyou)
+			return;
+		if(WaitTimeout(40*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+		{
+			flag_zuoyou = 0;
+			DoStop();
+			return;
+		}
+		DoStop();		
+		rt_kprintf("step2:背升结束\r\n");	
+// step3: 腿降		
+		rt_kprintf("step3:开始腿降\r\n");
+		if(ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			TuiBu(1, 0);
+		}
+		if(!flag_zuoyou)
+			return;
+		if(WaitTimeout(40*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+		{
+			flag_zuoyou = 0;
+			DoStop();
+			return;
+		}
+		DoStop();
+		rt_kprintf("step3:腿降结束\r\n");	
+// step4:背降
+		rt_kprintf("step4:开始背降\r\n");
+		if(ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			BeiBu(1, 0);
+			if(!flag_zuoyou)
+				return;
+			if(WaitTimeout(40*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+			{
+				flag_zuoyou = 0;
+				DoStop();
+				return;
+			}
+			while(!g_sensor.BeiBuFangPing); // 等到位跳出	
+		}
+		DoStop();		
+		rt_kprintf("step4:背降结束\r\n");	
+// step5:腿升
+		rt_kprintf("step5:开始腿升\r\n");
+		if(ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			TuiBu(1, 1);
+			if(!flag_zuoyou)
+				return;
+			if(WaitTimeout(40*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+			{
+				flag_zuoyou = 0;
+				DoStop();
+				return;
+			}
+			while(!g_sensor.TuiBuFangPing); // 等到位跳出	
+		}
+		DoStop();
+		rt_kprintf("step5:腿升结束\r\n");	
+// step6: 左翻身
+		rt_kprintf("step6:开始左翻身\r\n");
+		TuiBu(1, 1);
+		BeiBu(1,0);
+		DelayXms(30);
+		g_sensor.TuiBuFangPing = (0==(IO0PIN&BIT24));
+		g_sensor.BeiBuFangPing = (0==(IO0PIN&BIT4));	
+		if(g_sensor.TuiBuFangPing&&g_sensor.BeiBuFangPing)
+		{
+			ZuoFanShen(1,1);		
+		}
+		if(!flag_zuoyou)
+			return;
+		if(WaitTimeout(30*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+		{
+			flag_zuoyou = 0;
+			DoStop();
+			return;
+		}	
+		ZuoFanShen(0,0);
+		rt_kprintf("step6:左翻身结束\r\n");	
+// step7: 放平
+		rt_kprintf("step7:开始左放平\r\n");
+		ZuoFanShen(1,0);	
+		if(!flag_zuoyou)
+			return;
+		if(WaitTimeout(30*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+		{
+			flag_zuoyou = 0;
+			DoStop();
+			return;
+		}	
+		while(!ZYG_sensor.ZuoShuiPing); // 等到位跳出		
+		DoStop();
+		rt_kprintf("step7:放平结束\r\n");	
+// step8: 右翻身
+		rt_kprintf("step8:开始右翻身\r\n");
+		TuiBu(1, 1);
+		BeiBu(1,0);
+		DelayXms(30);
+		g_sensor.TuiBuFangPing = (0==(IO0PIN&BIT24));
+		g_sensor.BeiBuFangPing = (0==(IO0PIN&BIT4));	
+		if(g_sensor.TuiBuFangPing&&g_sensor.BeiBuFangPing)
+		{
+			YouFanShen(1,1);		
+		}
+		if(!flag_zuoyou)
+			return;
+		if(WaitTimeout(30*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+		{
+			flag_zuoyou = 0;
+			DoStop();
+			return;
+		}	
+		YouFanShen(0,0);
+		rt_kprintf("step8:右翻身结束\r\n"); 
+// step9: 放平
+		rt_kprintf("step9:开始右放平\r\n");
+		YouFanShen(1,0);	
+		if(!flag_zuoyou)
+			return;
+		if(WaitTimeout(30*RT_TICK_PER_SECOND, (1<<ActionCmdNone)|(1<<FanShenZuoYouYao)))
+		{
+			flag_zuoyou = 0;
+			DoStop();
+			return;
+		}	
+		while(!ZYG_sensor.YouShuiPing); // 等到位跳出		
+		DoStop();
+		rt_kprintf("step9:放平结束\r\n");	
+	}
+	flag_zuoyou = 0;	
+  	DoStop(); 	 
+	rt_kprintf("自动化测试结束\r\n");	
+}
+
+// 放平动作，如果已经放平则返回true，否则返回false
+BOOL FangPing(void)
+{
+	if(g_sensor.ShuiPing&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+	{
+		return TRUE;
+	}
+	else
+	{
+#if 0
+		if(!g_sensor.TuiBuFangPing)
+		{
+			TuiBu(1,1);
+		}
+		if(!g_sensor.BeiBuFangPing)
+		{
+			BeiBu(1,0);
+		}
+		if(g_sensor.BeiBuFangPing&&g_sensor.TuiBuFangPing)
+		{
+			if(g_sensor.ZuoQing)
+			{
+				FanShen(1,1);
+			}
+			else
+			{
+				FanShen(1,0);
+			}
+		}
+#endif
+		return FALSE;
+	}
+}
+
+// 动作超时
+static void ActionTimeout(void* parameter)
+{
+		BeiBu(0, 0);
+	//	ChuangTi(0, 0);
+	//	FanShen(0, 0);
+		TuiBu(0, 0);
+		ZuoFanShen(0,0);
+		YouFanShen(0,0);
+	//	TuiBei(0, 0);
+	//	QiDianFanShen(0,0); 
+
+}
+
+// 看门狗初始化
+// 2880000 ,1秒
+void WDInit(void)
+{
+//	WDTC = 0x00DBBA00;	// 设置看门狗定时器的固定装载值 : 5 秒
+	WDTC = 0x04F1A000;	// 设置看门狗定时器的固定装载值 : 30 秒
+	WDMOD= 0X03;   // 模式设定
+	feedWD();
+}
+
+void feedWD(void) // 喂狗
+{
+	WDFEED =0XAA;
+	WDFEED =0X55;
+}
+
+u32 WDtimers(void)
+{
+	return WDTV; //看门狗定时器的当前值
+}
+
+
+// 判断马桶盖子是否关闭,关闭态返回1   与左右翻有关
+static int IsToiletClose()
+{
+	if(g_ToiletSensor.QianBianMenZuoGuanBi&&g_ToiletSensor.QianBianMenYouGuanBi&&g_ToiletSensor.HouBianMenGuanBi)
+	{
+		return 1;
+	}
+	return 1;		//临时调试， 关闭马桶检测
+}
+
+
+// 动作调试模式，1表示调试模式
+#define DONG_ZUO_DEBUG	0
+
+// 开始动作命令
+void ActionStartCmd(ActionCmd cmd)
+{
+#if 0
+	if(cmd != ActionCmdNone)
+	{
+		rt_kprintf("ActionStartCmd= %d \r\n",cmd);
+	}
+#endif
+	if(g_sensor.ShuiPing&&!m_ShuiPing)	// 跳变发生了，非水平变成水平了
+	{
+		m_FanShenEnable = 0;	       // 用于机械结构摆动引起的传感器变化
+	}
+	m_FanShenEnable=1;
+	switch(cmd)
+	{
+	case TuiSheng	:
+		DoStop();
+#if !DONG_ZUO_DEBUG
+		if(g_sensor.ShuiPing&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+#endif
+		{
+			TuiBu(1, 1);
+		}
+		RestartTimer();
+		break;
+	case TuiJiang	:
+		DoStop();
+#if !DONG_ZUO_DEBUG
+		if(g_sensor.ShuiPing&&!g_sensor.TuiBuDaoDi&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+#endif
+		{
+			TuiBu(1, 0);
+		}
+		RestartTimer();
+		break;
+	case PingTang	:
+		DoStop();
+		if(g_sensor.ShuiPing&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			BeiBu(1, 0);
+			TuiBu(1, 1);
+		//	ChuangTi(1, 0);
+		}
+		else 
+		{
+			ZuoFanShen(1,0);
+			YouFanShen(1,0);
+		}
+		
+		RestartTimer();
+		break;	
+
+	case QiZuo	:
+		DoStop();
+		if(FangPing())
+		{
+			BeiBu(1, 1);
+			TuiBu(1, 0);
+		}
+		RestartTimer();
+		break;
+	case ChuiTiYangWo	:
+		DoStop();
+	//	ChuangTi(1, 1);
+		RestartTimer();
+		break;
+	case XinZangTangWei	:
+		DoStop();
+		if(FangPing())
+		{
+			BeiBu(1, 1);
+			TuiBu(1, 0);
+	//		ChuangTi(1, 1);
+		}
+		RestartTimer();
+		break;
+	case BeiSheng	:
+		DoStop();
+#if !DONG_ZUO_DEBUG
+		if(g_sensor.ShuiPing&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+#endif
+		{
+			BeiBu(1, 1);
+		}
+		RestartTimer();
+		break;
+	case BeiJiang:
+		DoStop();
+#if !DONG_ZUO_DEBUG
+		if(g_sensor.ShuiPing&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+#endif
+		{
+			BeiBu(1,0);
+		}	
+		RestartTimer();
+		break;
+
+case BianMenQuanGuan	:  // add mayb 2014.3.18.
+	DoStop();
+#if !DONG_ZUO_DEBUG
+	if(g_sensor.ShuiPing)
+#endif
+	{
+	  //  if((g_ToiletSensor.QianBianMenYouGuanBi==1)&&(g_ToiletSensor.HouBianMenGuanBi==1))
+				//	     TuiBei(1, 1);  // 便门推杆采用推背电控 
+	}
+	RestartTimer();
+	break;
+
+	case ZuoFan:	// todo
+#if !DONG_ZUO_DEBUG
+		if(ZYG_sensor.YouShuiPing)
+#endif			
+	{
+		TuiBu(1, 1);
+		BeiBu(1,0);
+		DelayXms(30);
+		g_sensor.TuiBuFangPing = (0==(IO0PIN&BIT24));
+		g_sensor.BeiBuFangPing = (0==(IO0PIN&BIT4));
+		
+		if(	IsToiletClose()&&
+			m_FanShenEnable&&
+			g_sensor.BeiBuFangPing&&
+			g_sensor.TuiBuFangPing)
+		{
+			ZuoFanShen(1,1);
+		}
+		else
+		{
+			ZuoFanShen(0,0);
+		}
+	}
+	else
+	{
+		DoStop();
+	}
+		RestartTimer();
+		break;
+		
+	case YouFan:	// todo
+#if !DONG_ZUO_DEBUG
+	if(ZYG_sensor.ZuoShuiPing)
+#endif			
+	{
+	TuiBu(1, 1);
+	BeiBu(1,0);
+	DelayXms(30);
+	g_sensor.TuiBuFangPing = (0==(IO0PIN&BIT24));
+	g_sensor.BeiBuFangPing = (0==(IO0PIN&BIT4));
+	
+
+		if( IsToiletClose()
+			&&m_FanShenEnable
+			&&g_sensor.BeiBuFangPing
+			&&g_sensor.TuiBuFangPing)
+		{
+			YouFanShen(1,1);
+		}
+		else
+		{
+			YouFanShen(0,0);
+		}
+	}
+	else
+	{
+		DoStop();
+	}
+		RestartTimer();
+		break;
+
+	case PingTangFanShen:
+		DoStop();
+		if(g_sensor.ShuiPing&&ZYG_sensor.ZuoShuiPing&&ZYG_sensor.YouShuiPing)
+		{
+			BeiBu(1, 0);
+			TuiBu(1, 1);
+		//	ChuangTi(1, 0);
+		}
+		else 
+		{
+			ZuoFanShen(1,0);
+			YouFanShen(1,0);
+		}
+		
+		RestartTimer();
+		break;		
+		
+	case ActionCmdNone:
+		m_FanShenEnable = 1;
+		flag_qidong=0;
+//		ActionTimeout(NULL);
+//		RestartTimer();
+		break;
+	default:
+		DbgPrintf("发送消息到动作进程\r\n");
+		rt_mb_send(&m_mb, cmd);
+		break;
+//		case ActionCmdNone:
+//			m_FanShenEnable = 1;
+//		rt_timer_stop(&m_timer);
+//		DoStop();			
+//			ActionTimeout(NULL);
+//			RestartTimer();
+//			ActionStopCmd(ActionCmdNone);
+//			break;
+	}
+	m_ShuiPing = g_sensor.ShuiPing;
+}
+FINSH_FUNCTION_EXPORT(ActionStartCmd,"开始命令[cmd]");
+
+// 停止动作命令
+void ActionStopCmd(ActionCmd cmd)
+{
+//	rt_timer_stop(&m_timer);
+//	DoStop();
+#if 1
+		if(cmd != ActionCmdNone)
+		{
+			rt_kprintf("ActionStopCmd= %d \r\n",cmd);
+		}
+#endif
+	rt_event_send(&m_evt, 1<<cmd);
+}
+
+FINSH_FUNCTION_EXPORT(ActionStopCmd, "停止命令");
+
+
+// 硬件初始化
+static void ActionHwInit(void)
+{
+	// PA8,9 作为输入
+	PINSEL0 &= ~(BIT16|BIT17);
+	PINSEL0 &= ~(BIT18|BIT19);	
+	
+	DoStop();
+	ActionTimeout(RT_NULL);
+}
+
+static void ActionInit(void)
+{
+
+	// 硬件初始化
+	ActionHwInit();
+	// 变量初始化
+
+	// 初始化邮箱
+	rt_mb_init(&m_mb, "act mb", mbPool, sizeof(mbPool)/sizeof(rt_uint32_t), RT_IPC_FLAG_FIFO);
+	// 初始化事件
+	rt_event_init(&m_evt, "act evt", RT_IPC_FLAG_FIFO);
+	// 初始化定时器
+	rt_timer_init(&m_timer, "act", ActionTimeout, RT_NULL, 0.1f*RT_TICK_PER_SECOND, RT_TIMER_FLAG_ONE_SHOT);
+//	rt_timer_init(&m_timer , "act", ActionTimeout, RT_NULL, RT_TICK_PER_SECOND*0.1f, RT_TIMER_FLAG_PERIODIC|RT_TIMER_FLAG_HARD_TIMER);		// 周期性调用
+
+}
+
+
+static void RestartTimer(void)
+{
+	rt_timer_stop(&m_timer);
+	rt_timer_start(&m_timer);
+}
+
+// 等待，如果返回非0表示该函数是由于外部停止动作命令而导致的返回
+static int WaitTimeout(rt_int32_t timeout,rt_uint32_t set)
+{
+	rt_uint32_t evt;
+	if(rt_event_recv(&m_evt,set , RT_EVENT_FLAG_CLEAR|RT_EVENT_FLAG_OR, timeout, &evt) == RT_EOK)
+	{
+		rt_kprintf("手动退出\r\n");
+		return -1;		// 接收到退出信号
+	}
+	else
+	{
+		return 0;		// 正常超时
+	}
+}
+
+// 接收到CAN回调函数
+extern rt_err_t CanRxInd(rt_device_t dev, rt_size_t size);
+extern void CanAnalyzerInit(void);
+
+
+// 动作进程入口
+void ActionThreadEntry(void* parameter)
+{
+	rt_uint32_t cmd,evt;
+	
+	ActionInit();
+
+	// 打开 CAN1 设备
+	CanAnalyzerInit();
+	
+	while(1)
+	{
+		// 等待接收邮件命令
+		rt_mb_recv(&m_mb, &cmd, RT_WAITING_FOREVER);	// 等待接收命令
+		DoStop();
+		rt_kprintf("接收到动作命令 %d\r\n",(int)cmd);
+		rt_event_recv(&m_evt,0xffffffff , RT_EVENT_FLAG_CLEAR|RT_EVENT_FLAG_OR, RT_WAITING_NO, &evt);	// 清事件
+		switch(cmd)
+		{
+			case BianMenQuanKai :	 // add mayb 2014.3.18.   // 为触发型自动完成整个过程
+				DoStop();
+				DoBianmenkai();
+				break;
+			case QiDianZuoFan:
+				DoStopQiDian();
+				DoZuoFan();
+				break;
+			case QiDianYouFan:
+				DoStopQiDian();
+				DoYouFan();
+				break;
+			case QiDianPingTang:		// add mayb
+				DoStopQiDian();
+				DoFangPing();
+				break;
+			case QiDianZuoYouYao:
+				DoStopQiDian();
+				DoZuoYouYao();
+				break;
+
+			default:
+				DoStopQiDian();
+				rt_kprintf("没有找到相应的动作指令\r\n");
+				break;
+		}
+		DoStop();
+		rt_mb_recv(&m_mb, &cmd, RT_WAITING_NO);	// 清命令
+		rt_event_recv(&m_evt,0xffffffff , RT_EVENT_FLAG_CLEAR|RT_EVENT_FLAG_OR, RT_WAITING_NO, &evt);	// 清事件
+		rt_kprintf("动作结束\r\n");
+	}
+}
+

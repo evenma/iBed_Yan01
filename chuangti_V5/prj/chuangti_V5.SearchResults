@@ -1,0 +1,19 @@
+---- TuiBei Æ¥Åä (18 ÔÚ 3 ÎÄ¼þ ) ----
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):void TuiBei(u8 work,u8 dir)
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):				TuiBei(1,1);			
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):			TuiBei(1,0);		 
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		TuiBei(0,0);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):	TuiBei(0, 0);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):	TuiBei(0, 0);	
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		TuiBei(0, 0);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app)://		TuiBei(1,0);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):			TuiBei(0,0);}
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app)://		TuiBei(1,1);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):			{	BeiBu(0,0);TuiBei(0,0);}
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		//	TuiBei(1,0);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		//	TuiBei(1,1);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):			 {	BeiBu(0,0);TuiBei(0,0);}
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		//	TuiBei(1,1);
+ActionThread.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		//	TuiBei(1,0);
+ActionThread.h (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):extern void TuiBei(u8 work,u8 dir);
+Sensor.c (e:\project\qy\thhlc\firmware\chuangti_v5\src\app):		TuiBei(0,0);

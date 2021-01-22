@@ -1,0 +1,7 @@
+---- ZHU_SHUI_SHUI_BENG 匹配 (6 在 3 文件 ) ----
+ActionThread.c (e:\project\qy\thhlc\firmware\zuobianqi_v5b\src\app):	ZHU_SHUI_SHUI_BENG(0);
+Sensor.c (e:\project\qy\thhlc\firmware\zuobianqi_v5b\src\app):			ZHU_SHUI_SHUI_BENG(1);	// 开启注水水泵		
+Sensor.c (e:\project\qy\thhlc\firmware\zuobianqi_v5b\src\app):			ZHU_SHUI_SHUI_BENG(0);	// 关闭注水水泵			
+Sensor.c (e:\project\qy\thhlc\firmware\zuobianqi_v5b\src\app):		{  ZHU_SHUI_SHUI_BENG(0);flag_zhushuibutton=0;g_actionzhushui=0;g_zhushui_time=0;
+Sensor.c (e:\project\qy\thhlc\firmware\zuobianqi_v5b\src\app):			{	 ZHU_SHUI_SHUI_BENG(0);g_actionzhushui=0;g_zhushui_time=0;g_qidong_time=0;
+Sensor.h (e:\project\qy\thhlc\firmware\zuobianqi_v5b\src\app):#define ZHU_SHUI_SHUI_BENG(on)	if(on) {IO0CLR = BIT11;} else {IO0SET = BIT11;}
