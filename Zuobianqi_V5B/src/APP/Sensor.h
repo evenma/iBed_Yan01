@@ -156,6 +156,6 @@ extern u16 m_XSBDuty;
 // 马桶内可视灯开关
 #define TOILET_LAMP_WORK(on) if(on) {IO0SET = BIT22;} else {IO0CLR = BIT22;}
 
-#define TIME_ROTATE_DINING	8			// 6秒
+#define TIME_ROTATE_DINING	6			// 6秒
 #endif
 

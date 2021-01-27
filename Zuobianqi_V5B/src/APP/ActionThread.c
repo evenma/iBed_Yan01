@@ -57,7 +57,6 @@ static u8 m_SuReQiLengShuiTimer = 0;
 
 u8 rotateDiningCount = 0;   // TIME_ROTATE_DINING=8   80 < 255
 u8 rotateDiningDir;  //电机的工作方向
-
 // 动作参数变量
 volatile s_SetAConfig  Set_A_Config={0};
 volatile s_SetBConfig  Set_B_Config={0};
@@ -137,13 +136,11 @@ void rotateDining(u8 work,u8 dir)
 	{
 		if(dir)
 		{
-			rotateDiningDir = 1;
+			rotateDiningDir = 1; // 变餐桌
 			IO0SET = BIT18;
 			IO1CLR = BIT29;
-		}
-		else
-		{
-			rotateDiningDir = 2;
+		}else{
+			rotateDiningDir = 2;      // 变靠背
 			IO0CLR = BIT18;
 			IO1SET= BIT29;
 		}
@@ -768,9 +765,8 @@ static void thread1_entry(void* parameter)
 	rt_thread_delay(TIME_ROTATE_DINING*RT_TICK_PER_SECOND); // 运行时长 = TIME_ROTATE_DINING 秒
 	
 	rt_kprintf("End 完成靠背\r\n");
-	rotateDiningCount=0;
 	rotateDining(0,0);
-	
+	rotateDiningCount=0;
 	// 增压小水泵打水，用于排空气
 	DoVacuumPump(25);	
 }
@@ -1677,15 +1673,19 @@ void DoRotatePADDown(void)
 void ActionThreadEntry(void* parameter)
 {
 	rt_uint32_t cmd,evt;
-	
+	u8 i=0;
 	ActionInit();
+
+	rt_kprintf("start system!\r\n");
+	NIGHT_LAMP_WORK(1);    // 初始化使用，初始化结束关闭
+	
 	// 打开 CAN1 设备
 	CanAnalyzerInit();	
 	rt_timer_init(&reshui_timer, "re shui", ReShuiTimer, RT_NULL, RT_TICK_PER_SECOND*0.5f, RT_TIMER_FLAG_PERIODIC|RT_TIMER_FLAG_SOFT_TIMER);
 	rt_timer_start(&reshui_timer);
 
 //	SuReQiSet(0,Set_B_Config.ShuiWen);  // 初始化速热器 不工作
-	
+
  /* 创建线程1  用于旋转餐桌初始化为靠背模式*/	
 	rt_thread_init(&thread_rotate,
 							 "rotate",
@@ -1694,7 +1694,21 @@ void ActionThreadEntry(void* parameter)
 							 12, 10);
 	rt_thread_startup(&thread_rotate);
 			
+
+	while(i<100)
+	{		
+		if(g_bedSensor.TuiBuFangPing && g_bedSensor.BianMenPingYiDaoDi)			 // 背部放平和便门关闭检测到了说明CAN通讯OK，床体控制初始化完毕			 
+		{
+			NIGHT_LAMP_WORK(0);	
+			break;
+		}	
+		rt_kprintf("-%c%c-",g_bedSensor.TuiBuFangPing?'Y':'N',g_bedSensor.BianMenPingYiDaoDi?'Y':'N');
+		rt_thread_delay(RT_TICK_PER_SECOND*0.5f);
+		i+=1;
+	}
+	
 	rt_kprintf("init system end\r\n");
+	
 	while(1)
 	{
 		// 等待接收邮件命令

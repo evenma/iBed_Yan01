@@ -67,7 +67,7 @@ unsigned char flagRelaseKey=0;
 #define RightGuardSetTime 15
 static u8 m_rotateDiningCnt=0;				// 时间
 static u8 m_rotateAbnorCnt=0;					// 异常次数
-#define TIME_ROTATE_DINING	8			// 6秒
+
 
 static u16 LeftGuardCount = 0;
 static u16 RightGuardCount = 0;
@@ -217,14 +217,21 @@ void TuiBei(u8 work,u8 dir)
 // 在餐桌机械臂运动过程中，判断餐桌旋转电机是否出现异常
 static u8 isDiningRotateAbnor(u8 dir)
 {
-	if((DiningCount > 9*TIME_RUN_DINING_MT && g_ZuobianqiSensor.rotateDiningCnt == 0)||(DiningCount < 2*TIME_RUN_DINING_MT && g_ZuobianqiSensor.rotateDiningCnt == 10*TIME_ROTATE_DINING))
+	if(((DiningCount > 9*TIME_RUN_DINING_MT) && (g_ZuobianqiSensor.rotateDiningCnt == 0))||((DiningCount < 2*TIME_RUN_DINING_MT) && (g_ZuobianqiSensor.rotateDiningCnt == 10*TIME_ROTATE_DINING)))
 	{
+		rt_kprintf("极度危险,Dining=%d,Rotate=%d\r\n",DiningCount,g_ZuobianqiSensor.rotateDiningCnt);
+		if((DiningCount > 9*TIME_RUN_DINING_MT && g_ZuobianqiSensor.rotateDiningCnt == 0))
+		{
+			rt_kprintf("压腿\r\n");
+		}else{
+			rt_kprintf("压头\r\n");
+		}
 		return 1;
 	}
 
 	if(dir == DiningDirDown)		// 变餐桌 DiningCount +
 	{
-			if(DiningCount > 5*TIME_RUN_DINING_MT)		// 4*TIME_RUN_DINING_MT时候，餐桌旋转电机启动
+		if(DiningCount > 5*TIME_RUN_DINING_MT)		// 4*TIME_RUN_DINING_MT时候，餐桌旋转电机启动
 			{
 				if(g_ZuobianqiSensor.rotateDiningCnt != 0 )		// 不是在靠背位，说明开始运动了 旋转电机运动时长 8S < 餐桌机械臂一半的时长 10S
 				{
@@ -235,14 +242,17 @@ static u8 isDiningRotateAbnor(u8 dir)
 								if(m_rotateAbnorCnt>3)			//2 餐桌旋转电机启动后停止了，说明异常可能线路板死机
 								{
 									m_rotateAbnorCnt = 0;
+									rt_kprintf("餐桌旋转时，通讯异常\r\n");
 									return 1;						
 								}
 								m_rotateAbnorCnt +=1;
+								rt_kprintf("%d",m_rotateAbnorCnt);
 						}else{
 							m_rotateAbnorCnt =0;
 						}
 					}
 				}else{					//1 时间到餐桌旋转电机还未启动说明异常
+					rt_kprintf("餐桌未启动，危险\r\n");
 					return 1;
 				}	
 			}
@@ -262,6 +272,7 @@ static u8 isDiningRotateAbnor(u8 dir)
 									return 1;						
 								}
 								m_rotateAbnorCnt +=1;
+								rt_kprintf("%d",m_rotateAbnorCnt);
 						}else{
 							m_rotateAbnorCnt =0;
 						}
@@ -286,6 +297,7 @@ void adjustTable(void)       // 100mS/pcs  餐桌推杆调整
 			{
 				if(DiningCount >= 10*TIME_DINING_CONFLICT_HUABEI)	   // 停过再启动，判断 全行程
 				{
+					rt_kprintf(".");
 					Dining(0,0);    // 停止运动		
 					DiningMode = DiningCmdNone;
 				}else{
@@ -293,7 +305,7 @@ void adjustTable(void)       // 100mS/pcs  餐桌推杆调整
 						DiningCount+=1;   // 100mS/pcs																			
 				}
 			}	
-	}else if(g_MT_work.beibu > 1)// 电机降累减
+	}else if((g_MT_work.beibu > 1) && (g_sensor.FunctionWorkTangYi == 0 ) )// 电机降累减   座椅模式变躺椅，背部很快到了，腿部还很长时间
 	{
 		if( DiningCount > 4*TIME_RUN_DINING_MT )  // 表示有变餐桌过，> 0.5行程
 		{
@@ -1654,10 +1666,12 @@ BOOL DoFangPing(void)
 	}	*/
 	for(i=0;i<(10*BeiBuYanShi);i++)
 	{
-		if(g_sensor.BeiBuFangPing)
-		{	rt_thread_delay(2);
+		if(g_sensor.BeiBuFangPing)   // 传感器依赖电机持续供电
+		{	
+			rt_thread_delay(2);
 			BeiBu(0,0);
-			TuiBei(0,0);}
+			TuiBei(0,0);
+		}
 		if(g_sensor.TuiBuFangPing)
 		{
 			if(g_MT_work.tuibu ==1)
@@ -1665,12 +1679,15 @@ BOOL DoFangPing(void)
 			TuiBu(0,0);
 		}
 		if(g_sensor.FangJia)
-		{	DoStop();
-			return TRUE;}			
+		{	
+			DoStop();
+			return TRUE;
+		}			
 		if(g_sensor.BeiBuFangPing&&g_sensor.TuiBuFangPing) // 背部腿部同时放平
-			break;
-		else
 		{
+				BeiBu(0,0);	
+			break;
+		}else{
 			if(WaitTimeout(20, (1<<PingTang)|(1<<STOP))) 	//停止键跳出
 			{
 				DoStop();				
@@ -1686,6 +1703,7 @@ BOOL DoFangPing(void)
 			}
 		}
 	}
+	rt_kprintf("背部腿部到位\r\n");
 	RightGuardCount = 10*RightGuardSetTime;
 	LeftGuardCount = 10*LeftGuardSetTime;	
 	LeftGuard(0,0);
@@ -1707,6 +1725,10 @@ BOOL DoFangPing(void)
 				return TRUE;			
 			}
 			DiningCount -=1;
+			if(isDiningRotateAbnor(DiningDirUp) != 0)  //异常处理
+			{
+					Dining(0,0);
+			}
 		}
 		Dining(0,0);
 		DiningCount = 0;
@@ -1768,8 +1790,9 @@ static void DoZuoYi(void)
 		
 		for(i=0;i<(10*BeiBuYanShi);i++)
 		{
-			if(beibumapancount >= 3000)	
+			if(beibumapancount >= 3000 && (DiningCount != 10*TIME_RUN_DINING_MT))	
 			{
+					rt_kprintf("+");
 					Dining(1,DiningDirDown);			// 变餐桌
 			}
 			if((beibumapancount>=m_beibu_max))
@@ -1802,17 +1825,22 @@ static void DoZuoYi(void)
 					Dining(0,0);					
 					return;
 				}
-				if(DiningCount >= 10*TIME_RUN_DINING_MT)  // 是否已变餐桌
+				if(g_MT_work.dining == 1)    // 未启动不能累加，
 				{
-					Dining(0,0);
-				}else{
-					if(g_MT_work.dining== 1)    // 未启动不能累加，
-						DiningCount +=1;  //100ms/pcs						
-				}
-				// 如果检测到餐桌旋转电机启动了，并且走一半不动。需要马上停止餐桌机械臂运动，否则后果严重
-				if(isDiningRotateAbnor(DiningDirDown) != 0)
-				{
+					DiningCount +=1;  //100ms/pcs	
+					if(DiningCount >= 10*TIME_RUN_DINING_MT)  // 是否已变餐桌
+					{
 						Dining(0,0);
+						rt_kprintf("餐桌到位");
+					}
+				}									
+				// 如果检测到餐桌旋转电机启动了，并且走一半不动。需要马上停止餐桌机械臂运动，否则后果严重
+				if(isDiningRotateAbnor(DiningDirDown) == 1)
+				{
+						rt_kprintf("Err\r\n");
+						Dining(0,0);
+						g_sensor.FunctionWorkZuoYi=0;	
+						return;
 				}			
 			}
 		}
@@ -1876,6 +1904,7 @@ static void DoZuoYi(void)
 			// 如果检测到餐桌旋转电机启动了，并且走一半不动。需要马上停止餐桌机械臂运动，否则后果严重
 			if(isDiningRotateAbnor(DiningDirDown) != 0)
 			{
+					rt_kprintf("异常\r\n");
 					Dining(0,0);
 					g_sensor.FunctionWorkZuoYi=0;	
 					return;
@@ -1921,10 +1950,10 @@ static void DoTangYi(void)
 		if(tuibumapancount<m_tuibu_max)	// 腿部为最顶端
 			TuiBu(1, 1);
 		// 上抬腿的时候，如果餐桌在，腿部压倒餐桌，需要把餐桌收掉
-		if(DiningCount > 0)	         // 餐桌机械臂在低位，不冲突滑背机构。定义0.2行程
-		{
+//		if(DiningCount > 0)	         // 餐桌机械臂在低位，不冲突滑背机构。定义0.2行程
+//		{
 				Dining(1,DiningDirUp);  //变靠背	
-		}			
+//		}			
 	
 	 	for(i=0;(i<(10*TuiBuYanShi));i++)
 	 	{
@@ -1944,35 +1973,36 @@ static void DoTangYi(void)
 					g_sensor.FunctionWorkTangYi=0;
 					return;
 				}
-			}
-			if(DiningCount > 5*TIME_RUN_DINING_MT)
-			{
-					if(g_ZuobianqiSensor.rotateDiningCnt > 5*TIME_ROTATE_DINING)		// 机械臂走过一半，还未开始餐桌旋转，
+				if(g_MT_work.dining == 2)
+				{	
+					if(DiningCount == 0)
 					{
-						Dining(0,0);			
+							Dining(0,0);
+					}else{
+						DiningCount -=1;
+					}	
+					if(isDiningRotateAbnor(DiningDirUp) != 0)  //异常处理
+					{
+							Dining(0,0);
 					}
-			}
-			if(g_MT_work.dining == 2)
-			{
-				DiningCount -= 1;
-				if(isDiningRotateAbnor(DiningDirUp) != 0)  //异常处理
-				{
-						Dining(0,0);
-				}
+				}				
 			}
 	 	}	
 		tuibumapancount= m_tuibu_max;			
 	}		
 	DoStop();
-	
+	rt_kprintf("back=%d,leg=%d\r\n",beibumapancount,tuibumapancount);
 	if(DiningCount > 0)
 	{
+		rt_kprintf("餐桌机械臂未到位\r\n");
 			Dining(1,DiningDirUp);  //变靠背	
 			for(i=0;i < DiningCount;i++)
 			{							
-				if(WaitTimeout(20, (1<<DiningUp)|(1<<STOP)))		
+				if(WaitTimeout(20, (1<<XinZangTangWei)|(1<<STOP)))		
 				{
 					Dining(0,0);
+					g_sensor.FunctionWorkTangYi=0;
+					return;
 				}	
 				DiningCount -=1;
 				if(isDiningRotateAbnor(DiningDirUp) != 0)  //异常处理
@@ -1982,7 +2012,7 @@ static void DoTangYi(void)
 			}
 	}
 	Dining(0,0);
-	
+	DiningCount=0;
 	g_sensor.FunctionWorkTangYi=0;	
 	g_FlagCmd.Anything=0;
 }
@@ -2390,7 +2420,8 @@ void initAllPosition(void)
 	TuiBu(1,0);				// 腿部下降
 	LeftGuard(1,GuardDirDown);    // 左护栏降    如果升，有前提条件，必须等餐桌推杆离开后，才能升。
 	RightGuard(1,GuardDirDown);		// 右护栏降    如果升，有前提条件，必须等餐桌推杆离开后，才能升。
-//	Dining(1,DiningDirUp);			// 餐桌推杆变靠背  有前提条件，必须背部放平后运行，以免和滑背机构冲突
+	DiningCount = 10*TIME_RUN_DINING_MT;
+	Dining(1,DiningDirUp);			// 餐桌推杆变靠背  有前提条件，必须背部放平后运行，以免和滑背机构冲突
 	g_sensor.BianMenPingYiDaoDi= (0==(IO1PIN&BIT26));
 	g_sensor.BianMenPingYiDaoDing= (0==(IO1PIN&BIT25));
 	if(g_sensor.BianMenPingYiDaoDing)  //   便门平移机构处于顶部位置，未移走,即便门开着
@@ -2412,7 +2443,7 @@ void initAllPosition(void)
 		g_sensor.TuiBuFangPing=((IO1PIN&BIT20)>0);
 		if(g_sensor.TuiBuFangPing)
 		{
-			//rt_kprintf("腿部放平到位\r\n");
+		//	rt_kprintf("腿部放平到位\r\n");
 			//rt_thread_delay(200);    // 150-168mm 均能检测到传感器值,所以往下运动时检测到位置也要延时停
 			tuibumapancount = m_tuibu_middle;
 			TuiBu(0,0);
@@ -2466,6 +2497,12 @@ void initAllPosition(void)
 //	rt_kprintf("餐桌计时-%d,左护栏-%d,右护栏-%d\r\n",DiningCount,LeftGuardCount,RightGuardCount);
 	
 			DoAllStop();
+		if(i < 10*TIME_RUN_DINING_MT)   // 餐桌机械臂时间不够
+		{
+			Dining(1,DiningDirUp);		// 餐桌变靠背
+			rt_thread_delay((10*TIME_RUN_DINING_MT-i)*20);
+			Dining(0,0);
+		}	
 			DiningCount = 0;	
 			LeftGuardCount = 0;
 			RightGuardCount = 0;

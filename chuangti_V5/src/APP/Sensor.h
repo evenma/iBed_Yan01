@@ -74,20 +74,25 @@ typedef struct{
 	u8 ShuiXiangHigh		: 1;		// 水箱满标志
 	u8 ShuiXiangLow			: 1;		// 水箱低标志
 	u8 rev					: 1;		// 预留
+
 	u16 WuWuXiangZhongLiang		;		// 污物箱重量
-	
+
 	//	u8 ChuFengWenDu				;		// 出风口温度  结构上做不了
 	// 	u8 ChuanDianWenDu			;		//  床垫温度 与气垫冲突，气垫不能加热
 	u8 rotateDiningCnt;				// 餐桌旋转电机
 	
 	u8 ReShuiWenDu				;		// 速热器热水温度
+	
 	u8 LengShuiWenDu			;       // 水箱冷水温度
+	
 	u8 FunctionWorkNuanFeng : 1	;		// 功能运行状态 暖风烘干
 	u8 FunctionWorkQianBu	: 1	;		// 功能运行状态 前部冲洗
 	u8 FunctionWorkHouBu	: 1	;		// 功能运行状态 后部冲洗
 	u8 FunctionWorkMaTong 	: 1	;		// 功能运行状态 马桶冲洗
 	u8 FunctionWorkAuto 	: 1	;		// 功能运行状态 智能模式
-	u8 rv					: 3;		// 预留	
+	u8 MaTongFull			: 1 ;		// 马桶内液位满 
+	u8 rv					: 2 ;		// 预留	
+
 	u8 SuReQiError				;		// 速热器异常反馈
 }s_ZuobianqiSensor;
 
@@ -117,7 +122,7 @@ extern volatile s_ZuobianqiSensor g_ZuobianqiSensor;
 #define TUI_SHANG_JIAODU_MAX 14
 #define FANSHEN_JIAODU_MAX 50
 
-
+#define TIME_ROTATE_DINING	6			// 6秒
 
 // 传感器初始化
 extern void SensorInit(void);

@@ -1,7 +1,7 @@
 #include "Sensor.h"
 #include "Adc.h"
 extern void rotateDining(u8 work,u8 dir);
-extern u16 rotateDiningCount;
+extern u8 rotateDiningCount;
 extern u8 rotateDiningDir;
 // 传感器状态全局变量
 volatile s_Sensor g_sensor = {0};		
@@ -46,6 +46,8 @@ unsigned long ChengZhongReg=0;
 #define WenDuJianCe_TIME  100      // 1 MIN 60s 100ms/次
 static u32 g_wendu_time = 0;  //温度检测计时
 
+u8 flag_rotate = 0;    // 表示启动过旋转餐桌电机
+
 #ifdef RT_USING_FINSH
 
 #include "CAN/IncludeCan.h"
@@ -77,7 +79,8 @@ static void SensorList(void * parameter)
 	rt_kprintf("\t速热器报警错误: %d\r\n",(u32)g_sensor.SuReQiError);
 	rt_kprintf("\t污物箱重量: %d\r\n",(u32)g_sensor.WuWuXiangZhongLiang);
 	rt_kprintf("\t称重寄存器值: %d\r\n",(u32)ChengZhongReg);
-	rt_kprintf("\t餐桌旋转电机: %d\r\n",(u32)g_sensor.rotateDiningCnt);
+	rt_kprintf("\t餐桌旋转电机: %d\r\n",g_sensor.rotateDiningCnt);
+	rt_kprintf("\trotate: %d\r\n",rotateDiningCount);
 //	rt_kprintf("\t床垫温度: %d\r\n",(u32)g_sensor.ChuanDianWenDu);
 	rt_kprintf("\tg_sensor= %X, %X\r\n",(u32)(*((u8*)(&g_sensor))),(u32)(*(((u8*)(&g_sensor))+1)));
 }
@@ -242,35 +245,49 @@ static void SensorCheck(void * parameter)
 	// 餐桌推杆收放时，餐桌旋转减速电机同步工作
 	// 位置1：到顶 10*TIME_RUN_DINING_MT，位置2：离开滑背位 2*TIME_RUN_DINING_MT ， 位置3：中间位 5*TIME_RUN_DINING_MT
 	// 旋转餐桌需要时长 5s, 旋转机械臂需要时长TIME_RUN_DINING_MT =25s 只要1/5时间=2*TIME_RUN_DINING_MT
-	if(rotateDiningDir ==1)		// 变餐桌
+	if(rotateDiningDir == 1)		// 变餐桌
 	{
-		rotateDiningCount +=1;
 		if(rotateDiningCount >= 10*TIME_ROTATE_DINING)
 		{
+			rotateDiningCount = 10*TIME_ROTATE_DINING;
 			rotateDining(0,0);
+		}else{
+			rotateDiningCount += 1;
 		}
-	}else if(rotateDiningDir ==2)		//变靠背
+	}else if(rotateDiningDir == 2)		//变靠背
 	{
-		if(!rotateDiningCount)
+		if(rotateDiningCount == 0 || rotateDiningCount > 10*TIME_ROTATE_DINING)
 		{	
+			rotateDiningCount = 0;
 			rotateDining(0,0); 
+		}else{
+			rotateDiningCount -= 1;
 		}
-		else
-			rotateDiningCount -=1;
 	}
 		g_sensor.rotateDiningCnt = rotateDiningCount;
+	
 	if(g_bedsensor_MT_work.dining == 1)   // 座椅模式下，变餐桌，diningCnt 增大 需要旋转电机工作，
 	{
 		if(g_bedsensor_MT_work.diningCnt > 4*TIME_RUN_DINING_MT)		// 0.1S一次采样 max = 10*TIME_RUN_DINING_MT   6*TIME_RUN_DINING_MT为起背和机械臂同时启动时的数据；
 		{
+				rt_kprintf("+");
 				rotateDining(1,1);   // 变餐桌    如果线路板死机，这边动作，对人体不构成危险
+				flag_rotate = 1;
 		}	
 	}else if(g_bedsensor_MT_work.dining == 2)    // 变靠背 ，diningCnt 减少
 	{		
 		if(g_bedsensor_MT_work.diningCnt < 9*TIME_RUN_DINING_MT)     // 确保机械臂缩回(抬高)一小段距离，旋转餐桌不碰撞人体
 		{
+			rt_kprintf("-");
 			rotateDining(1,0);   // 变靠背			如果线路板死机，这边动作，对人体不构成危险
+			flag_rotate = 1;
 		}
+	}else{									// 启动过了，暂停
+		if(flag_rotate)
+		{
+			flag_rotate = 0;
+			rotateDining(0,0);
+		}			
 	}
 	
 		

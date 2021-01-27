@@ -202,7 +202,7 @@ static void SensorList(void * parameter)
 	rt_kprintf("\tBack encode: %d \r\n",beibumapancount);
 	rt_kprintf("\tLeg encode: %d \r\n",tuibumapancount);
 	rt_kprintf("\tDining time: %d \r\n",g_MT_work.diningCnt);
-	
+	rt_kprintf("\trotate time: %d \r\n",g_ZuobianqiSensor.rotateDiningCnt);
 
 	rt_kprintf("\tBatt Voltage: %d V \r\n",(g_diancidianliangAd/31));
 
@@ -313,6 +313,9 @@ static void SensorCheck(void * parameter)
 		g_sensor.ZuoFanFangPing=(0==(IO1PIN&BIT29));
 	if(g_MT_work.youfanshen>0)  // 只有在电机运动时读取值有效
 		g_sensor.YouFanFangPing=(0==(IO1PIN&BIT22));
+	
+	if(g_ZuobianqiSensor.rotateDiningCnt > 10*TIME_ROTATE_DINING)
+		g_ZuobianqiSensor.rotateDiningCnt = 0;
 	
 	g_sensor.ZuoFanFangPing =1;		// 不支持
 	g_sensor.YouFanFangPing =1;		// 不支持
